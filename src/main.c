@@ -1,4 +1,3 @@
-#include "SDL2/SDL_error.h"
 #include <stdio.h>
 #include <stdbool.h>
 
@@ -20,6 +19,7 @@ void audio_callback(void *userdata, Uint8 *stream, int len) {
 
 int main(int argc, char *argv[]) {
 
+    int exit_code = 0;
 
     if (argc < 2) {
         return usage(stderr, 1);
@@ -36,36 +36,34 @@ int main(int argc, char *argv[]) {
     if (err < 0) {
         err_msg = SDL_GetError();
         fprintf(stderr, "SDL Init error: %s\n", err_msg);
-        return 1;
+        exit_code = 1;
+        goto cleanup_sdl_quit;
     }
 
-    SDL_Window * window = SDL_CreateWindow("CodeRadio", 
+    SDL_Window * window = SDL_CreateWindow("Code Radio", 
             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
             600, 400,
-            SDL_WINDOW_RESIZABLE 
+            SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED
     );
     if (window == NULL) {
         fprintf(stderr, "SDL Create Window error\n");
-        return 1;
+        exit_code = 1;
+        goto cleanup_sdl_quit;
     }
 
-    /* AVFormatContext *format_ctx = avformat_alloc_context(); */
-    /* if (!format_ctx) { */
-    /*     fprintf(stderr, "Couldn't create AVFormatContext\n"); */
-    /*     return 1; */
-    /* } */
     AVFormatContext *format_ctx = NULL;
     err = avformat_open_input(&format_ctx, audio_url, NULL, NULL);
     if (err < 0) {
         fprintf(stderr, "Couldn't open audio file: %s\n", audio_url);
-        avformat_free_context(format_ctx);
-        return 1;
+        exit_code = 1;
+        goto cleanup_av_context;
     }
 
     err = avformat_find_stream_info(format_ctx, NULL);
     if (err < 0) {
         fprintf(stderr, "Couldn't find stream info from audio file: %s\n", audio_url);
-        return 1;
+        exit_code = 1;
+        goto cleanup_av_context;
     }
     av_dump_format(format_ctx, 0, audio_url, 0);
 
@@ -90,7 +88,8 @@ int main(int argc, char *argv[]) {
     if (audio_stream_idx < 0) {
         /* Did not find a audio stream */
         fprintf(stderr, "Couldn't find audio stream[%d] in: %s\n", audio_stream_idx, audio_url);
-        return 1;
+        exit_code = 1;
+        goto cleanup_av_context;
     }
 
 
@@ -104,7 +103,8 @@ int main(int argc, char *argv[]) {
     err = avcodec_open2(audio_codec_ctx, audio_codec, NULL);
     if (err < 0) {
         fprintf(stderr, "Couldn't find open avcodec\n");
-        return 1;
+        exit_code = 1;
+        goto cleanup_av_context;
     }
 
     SDL_AudioSpec desired_spec = {
@@ -122,13 +122,15 @@ int main(int argc, char *argv[]) {
     err = SDL_OpenAudio(&desired_spec, &obtained_spec);
     if (err < 0) {
         fprintf(stderr, "Unable to open audio device: %s\n", SDL_GetError());
-        return 1;
+        exit_code = 1;
+        goto cleanup_av_audio;
     }
 
     SDL_Event e;
     bool quit = false;
 
     while (!quit) {
+      /* while(av_read_frame(pFormatCtx, &packet)>=0) { */
         while(SDL_PollEvent(&e)) {
 
             switch (e.type) {
@@ -139,10 +141,17 @@ int main(int argc, char *argv[]) {
 
         }
     }
-
+cleanup_av_audio:
+    SDL_CloseAudio();
+cleanup_av_codec_context:
+    avcodec_free_context(&audio_codec_ctx);
+cleanup_av_context:
+    avformat_free_context(format_ctx);
+cleanup_sdl_window:
     SDL_DestroyWindow(window);
+cleanup_sdl_quit:
     SDL_Quit();
 
-    return 0;
+    return exit_code;
 }
 
