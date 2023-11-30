@@ -96,7 +96,8 @@ int main(int argc, char *argv[]) {
     const AVCodec *audio_codec = avcodec_find_decoder(audio->codecpar->codec_id);
     if (audio_codec == NULL) {
         fprintf(stderr, "Unable to find audio codec");
-        return 1;
+        exit_code = 1;
+        goto cleanup_av_context;
     }
 
     AVCodecContext *audio_codec_ctx = avcodec_alloc_context3(audio_codec);
