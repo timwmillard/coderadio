@@ -1,8 +1,9 @@
+#include "libavutil/frame.h"
 #include <stdio.h>
 #include <stdbool.h>
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_audio.h>
+#include <SDL.h>
+#include <SDL_audio.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -21,10 +22,13 @@ int main(int argc, char *argv[]) {
 
     int exit_code = 0;
 
+    char *audio_url;
     if (argc < 2) {
-        return usage(stderr, 1);
+        audio_url = "https://coderadio-admin-v2.freecodecamp.org/listen/coderadio/radio.mp3";
+        /* return usage(stderr, 1); */
+    } else {
+        audio_url = argv[1];
     }
-    char *audio_url = argv[1];
 
     printf("🎸 🥁 🎹 -- CodeRadio --\n");
 
@@ -54,14 +58,14 @@ int main(int argc, char *argv[]) {
     AVFormatContext *format_ctx = NULL;
     err = avformat_open_input(&format_ctx, audio_url, NULL, NULL);
     if (err < 0) {
-        fprintf(stderr, "Couldn't open audio file: %s\n", audio_url);
+        fprintf(stderr, "Couldn't open audio file %s: %s\n", audio_url, av_err2str(err));
         exit_code = 1;
         goto cleanup_av_context;
     }
 
     err = avformat_find_stream_info(format_ctx, NULL);
     if (err < 0) {
-        fprintf(stderr, "Couldn't find stream info from audio file: %s\n", audio_url);
+        fprintf(stderr, "Couldn't find stream info from audio file %s: %s\n", audio_url, av_err2str(err));
         exit_code = 1;
         goto cleanup_av_context;
     }
@@ -95,7 +99,7 @@ int main(int argc, char *argv[]) {
 
     const AVCodec *audio_codec = avcodec_find_decoder(audio->codecpar->codec_id);
     if (audio_codec == NULL) {
-        fprintf(stderr, "Unable to find audio codec");
+        fprintf(stderr, "Unable to find audio codec: %s\n", av_err2str(err));
         exit_code = 1;
         goto cleanup_av_context;
     }
@@ -103,7 +107,7 @@ int main(int argc, char *argv[]) {
     AVCodecContext *audio_codec_ctx = avcodec_alloc_context3(audio_codec);
     err = avcodec_open2(audio_codec_ctx, audio_codec, NULL);
     if (err < 0) {
-        fprintf(stderr, "Couldn't find open avcodec\n");
+        fprintf(stderr, "Couldn't find open avcodec: %s\n", av_err2str(err));
         exit_code = 1;
         goto cleanup_av_context;
     }
@@ -116,42 +120,92 @@ int main(int argc, char *argv[]) {
         .samples = 1024,
         .padding = 0,
         .size = 0,
-        .callback = audio_callback,
+        /* .callback = audio_callback, */
+        .callback = NULL,
         .userdata = audio_codec_ctx,
     };
     SDL_AudioSpec obtained_spec;
-    err = SDL_OpenAudio(&desired_spec, &obtained_spec);
+
+    SDL_AudioDeviceID audio_dev;
+    audio_dev = SDL_OpenAudioDevice(NULL, 0, &desired_spec, &obtained_spec, 0);
     if (err < 0) {
         fprintf(stderr, "Unable to open audio device: %s\n", SDL_GetError());
         exit_code = 1;
         goto cleanup_av_audio;
     }
 
+    SDL_AudioStream *audio_stream;
+    audio_stream = SDL_NewAudioStream(AUDIO_S16MSB,1, 0, 0, 0, 0 );
+
     SDL_Event e;
-    bool quit = false;
+    /* bool quit = false; */
 
-    while (!quit) {
-      /* while(av_read_frame(pFormatCtx, &packet)>=0) { */
-        while(SDL_PollEvent(&e)) {
-
-            switch (e.type) {
-                case SDL_QUIT:
-                    quit = true;
-                    break;
-            }
-
+    /* while (!quit) { */
+    AVPacket packet;
+    AVFrame *frame = malloc(sizeof(AVFrame));
+    while(av_read_frame(format_ctx, &packet)>=0) {
+    /* while (true) { */
+        SDL_WaitEvent(&e);
+        switch (e.type) {
+            case SDL_QUIT:
+                goto cleanup_av_audio;
+                break;
         }
+
+        err = av_read_frame(format_ctx, &packet);
+        if (err == AVERROR_EOF) {
+            continue;
+            printf("Audio file finished\n");
+            goto cleanup_av_audio;
+        }
+        if (err < 0) {
+            fprintf(stderr, "Error reading audio frame: %s\n", av_err2str(err));
+            goto cleanup_av_audio;
+        }
+
+        err = avcodec_send_packet(audio_codec_ctx, &packet);
+        if (err < 0) {
+            fprintf(stderr, "Failed to decode packet: %s\n", av_err2str(err));
+            exit_code = 1;
+            goto cleanup_av_audio;
+        }
+
+        err = avcodec_receive_frame(audio_codec_ctx, frame);
+        if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
+            continue;
+        } else if (err < 0) {
+            fprintf(stderr, "Failed to receive frame: %s\n", av_err2str(err));
+            exit_code = 1;
+            goto cleanup_av_audio;
+        }
+
+        /* uint8_t **data = frame.data; */
+
+        /* err = SDL_AudioStreamPut(audio_stream, frame.data, frame.nb_samples); */
+        err = SDL_QueueAudio(audio_dev, frame->data, frame->nb_samples);
+        if (err < 0) {
+            err_msg = SDL_GetError();
+            fprintf(stderr, "SDL Queue Audio error: %s\n", err_msg);
+            exit_code = 1;
+            goto cleanup_av_audio;
+        }
+
+        av_packet_unref(&packet);
+        
     }
-cleanup_av_audio:
-    SDL_CloseAudio();
-cleanup_av_codec_context:
-    avcodec_free_context(&audio_codec_ctx);
-cleanup_av_context:
-    avformat_free_context(format_ctx);
-cleanup_sdl_window:
-    SDL_DestroyWindow(window);
-cleanup_sdl_quit:
-    SDL_Quit();
+
+    printf("Finished playing audio\n");
+
+    cleanup_av_audio:
+        SDL_CloseAudioDevice(audio_dev);
+    cleanup_av_codec_context:
+        avcodec_free_context(&audio_codec_ctx);
+    cleanup_av_context:
+        avformat_free_context(format_ctx);
+    cleanup_sdl_window:
+        SDL_DestroyWindow(window);
+    cleanup_sdl_quit:
+        SDL_Quit();
 
     return exit_code;
 }

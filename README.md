@@ -3,6 +3,8 @@
 
 # References
 
+https://github.com/leandromoreira/ffmpeg-libav-tutorial
+
 Github
 https://github.com/bmewj/video-app
 
@@ -27,3 +29,5 @@ https://coderadio-admin-v2.freecodecamp.org/listen/coderadio/radio.mp3
 Video
 https://coderadio.freecodecamp.org/static/media/Saron3.cb9bbffcf0eaef69b98b.webm
 
+
+https://stackoverflow.com/questions/55438697/playing-sound-from-a-video-using-ffmpeg-and-sdl-queueaudio-results-in-high-pitch
