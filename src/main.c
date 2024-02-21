@@ -1,3 +1,4 @@
+#include "libavutil/frame.h"
 #include <stdio.h>
 #include <stdbool.h>
 #include <pthread.h>
@@ -93,10 +94,9 @@ bool stream_audio(const char *audio_url)
     };
     SDL_AudioSpec obtained_spec;
 
-    SDL_AudioDeviceID audio_dev;
-    audio_dev = SDL_OpenAudioDevice(NULL, 0, &desired_spec, &obtained_spec, 0);
-    if (err < 0) {
-        fprintf(stderr, "Unable to open audio device: %s\n", SDL_GetError());
+    SDL_AudioDeviceID audio_dev = SDL_OpenAudioDevice(NULL, 0, &desired_spec, &obtained_spec, 0);
+    if (audio_dev == 0) {
+        fprintf(stderr, "Unable to open audio device on thread: %s\n", SDL_GetError());
         goto cleanup_sdl_audio;
     }
 
@@ -120,28 +120,33 @@ bool stream_audio(const char *audio_url)
         }
 
         err = avcodec_send_packet(audio_codec_ctx, &packet);
-        if (err < 0) {
-            fprintf(stderr, "Failed to decode packet: %s\n", av_err2str(err));
-            goto cleanup_av_audio;
-        }
+        while (err == 0) {
+            err = avcodec_receive_frame(audio_codec_ctx, frame);
+            if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
+                break;
+            } else if (err < 0) {
+                fprintf(stderr, "Failed to receive frame: %s\n", av_err2str(err));
+                goto cleanup_av_audio;
+            }
 
-        err = avcodec_receive_frame(audio_codec_ctx, frame);
-        if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
-            continue;
-        } else if (err < 0) {
-            fprintf(stderr, "Failed to receive frame: %s\n", av_err2str(err));
-            goto cleanup_av_audio;
-        }
 
+            // ENCODE frame
+            err = SDL_QueueAudio(audio_dev, frame->data, 8);
+            if (err < 0) {
+                err_msg = SDL_GetError();
+                fprintf(stderr, "SDL Queue Audio error: %s\n", err_msg);
+                goto cleanup_av_audio;
+            }
+            printf("Queuing Audio Frame: duration=%lld\n", frame->duration);
+
+            av_frame_unref(frame);
+        }
+        if (err != AVERROR(EAGAIN) && err != AVERROR_EOF) {
+            fprintf(stderr, "Error sneding audio packet: %s\n", av_err2str(err));
+        }
         av_packet_unref(&packet);
+        
 
-        /* err = SDL_AudioStreamPut(audio_stream, frame.data, frame.nb_samples); */
-        err = SDL_QueueAudio(audio_dev, frame->data, frame->nb_samples);
-        if (err < 0) {
-            err_msg = SDL_GetError();
-            fprintf(stderr, "SDL Queue Audio error: %s\n", err_msg);
-            goto cleanup_av_audio;
-        }
     }
 
 
@@ -175,7 +180,8 @@ int main(int argc, char *argv[])
     int exit_code = 0;
 
     if (argc < 2) {
-        audio_url = "https://coderadio-admin-v2.freecodecamp.org/listen/coderadio/radio.mp3";
+        /* audio_url = "https://coderadio-admin-v2.freecodecamp.org/listen/coderadio/radio.mp3"; */
+        audio_url = "radio.mp3";
         /* return usage(stderr, 1); */
     } else {
         audio_url = argv[1];
@@ -183,8 +189,8 @@ int main(int argc, char *argv[])
 
     printf("🎸 🥁 🎹 -- CodeRadio --\n");
 
-    pthread_t stream_thread_id;
-    pthread_create(&stream_thread_id, NULL, stream_thread, NULL);
+    /* pthread_t stream_thread_id; */
+    /* pthread_create(&stream_thread_id, NULL, stream_thread, NULL); */
 
     printf("Main Thread\n");
     // SDL Setup
@@ -210,6 +216,8 @@ int main(int argc, char *argv[])
         exit_code = 1;
         goto cleanup_sdl_quit;
     }
+
+    stream_audio(audio_url);
 
 
     SDL_Event e;
